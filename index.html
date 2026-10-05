@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#2f6f5e">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg">
+<title>Retell Mobile</title>
+<style>
+  :root {
+    --bg: #f6f5f1; --card: #ffffff; --ink: #1f1f1c; --mute: #6b6a63; --line: #e3e1d9;
+    --accent: #2f6f5e; --accent-ink: #fff; --rec: #c2412d; --soft: #eef3f0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #161615; --card: #1f1f1d; --ink: #ecebe6; --mute: #9c9a92; --line: #33332f;
+            --accent: #5fae97; --accent-ink: #0d1a16; --rec: #e0634d; --soft: #1d2724; }
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 600px; margin: 0 auto; padding: 14px 16px calc(150px + env(safe-area-inset-bottom)); }
+  button, select { font: inherit; color: var(--ink); }
+  button { padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+  button:disabled { opacity: .4; }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .top { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+  .top h1 { font-size: 17px; margin: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nav { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+  .nav select { flex: 1; min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+  .nav button { width: 48px; font-size: 20px; padding: 8px 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin-bottom: 12px; }
+  .label { font-size: 13px; color: var(--mute); margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; }
+  .label button { padding: 4px 10px; font-size: 14px; }
+  audio { width: 100%; height: 44px; }
+  .original { white-space: pre-wrap; font-family: Georgia, "Times New Roman", serif; font-size: 18px; line-height: 1.65; }
+  .hidden-text { filter: blur(7px); user-select: none; }
+  .attempt { display: flex; gap: 8px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
+  .attempt:first-of-type { border-top: 0; }
+  .attempt .n { font-size: 13px; color: var(--mute); width: 64px; flex: none; }
+  .attempt audio { flex: 1; min-width: 0; }
+  .attempt button { padding: 8px 10px; flex: none; }
+  .empty { color: var(--mute); text-align: center; padding: 40px 10px; }
+  .dock { position: fixed; left: 0; right: 0; bottom: 0; padding: 12px 16px calc(14px + env(safe-area-inset-bottom));
+          background: linear-gradient(transparent, var(--bg) 30%); display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .dock[hidden] { display: none; }
+  #rec { width: 84px; height: 84px; border-radius: 50%; font-size: 30px; background: var(--card); border: 2px solid var(--rec); color: var(--rec); }
+  #rec.on { background: var(--rec); color: #fff; animation: pulse 1.2s infinite; }
+  @keyframes pulse { 50% { box-shadow: 0 0 0 10px color-mix(in srgb, var(--rec) 25%, transparent); } }
+  #timer { font-size: 14px; color: var(--mute); min-height: 20px; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<main>
+  <div class="top">
+    <h1 id="title">Retell</h1>
+    <button id="open">Open pack</button>
+    <input id="fileInput" type="file" hidden>
+  </div>
+
+  <div id="empty" class="empty">
+    On your computer, click <b>📱 Send to phone</b> in Retell Practice.<br>
+    Then tap <b>Open pack</b> and pick the file from<br><b>Google Drive › Retell-phone</b>.
+  </div>
+
+  <div id="ui" hidden>
+    <div class="nav">
+      <button id="prev">‹</button>
+      <select id="item"></select>
+      <button id="next">›</button>
+    </div>
+
+    <div class="card">
+      <div class="label">Listen</div>
+      <audio id="player" controls preload="auto"></audio>
+    </div>
+
+    <div class="card">
+      <div class="label">Your recordings <span id="count"></span></div>
+      <div id="attempts"><div class="mute" style="font-size:14px">Tap the red button to record. Newest is on top.</div></div>
+    </div>
+
+    <div class="card">
+      <div class="label">Text <button id="reveal">Show</button></div>
+      <div id="original" class="original hidden-text"></div>
+    </div>
+  </div>
+</main>
+
+<div class="dock" id="dock" hidden>
+  <button id="rec" aria-label="Record">●</button>
+  <div id="timer"></div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const ls = {
+  get(k) { try { return JSON.parse(localStorage.getItem('retellm:' + k)); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem('retellm:' + k, JSON.stringify(v)); } catch {} },
+};
+
+// 素材包可能有好几 MB，localStorage 放不下，存 IndexedDB
+const idb = {
+  open() {
+    return new Promise((ok, no) => {
+      const r = indexedDB.open('retell-mobile', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('kv');
+      r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error);
+    });
+  },
+  async get(k) {
+    try { const db = await this.open();
+      return await new Promise(ok => { const q = db.transaction('kv').objectStore('kv').get(k); q.onsuccess = () => ok(q.result); q.onerror = () => ok(null); });
+    } catch { return null; }
+  },
+  async set(k, v) {
+    try { const db = await this.open();
+      await new Promise(ok => { const t = db.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = t.onerror = ok; });
+    } catch {}
+  },
+};
+
+let items = [], idx = 0, ttsUrl = null, attempts = [], recorder = null, recStart = 0, tick = null, n = 0;
+
+function load(pack, start = 0) {
+  $('title').textContent = pack.title;
+  items = [];
+  for (const s of pack.sections)
+    s.chunks.forEach((c, i) => items.push({ label: s.chunks.length > 1 ? `${s.label} (${i + 1}/${s.chunks.length})` : s.label, ...c }));
+  $('item').innerHTML = items.map((x, i) => `<option value="${i}">${esc(x.label)}</option>`).join('');
+  $('empty').hidden = items.length > 0; $('ui').hidden = $('dock').hidden = !items.length;
+  if (items.length) go(Math.min(start, items.length - 1));
+}
+
+function go(i) {
+  if (recorder && recorder.state === 'recording') return;
+  idx = i; $('item').value = i;
+  ls.set('idx', i);
+  const it = items[i];
+  if (ttsUrl) URL.revokeObjectURL(ttsUrl);
+  const bin = atob(it.audio), buf = new Uint8Array(bin.length);
+  for (let k = 0; k < bin.length; k++) buf[k] = bin.charCodeAt(k);
+  ttsUrl = URL.createObjectURL(new Blob([buf], { type: 'audio/mpeg' }));
+  $('player').src = ttsUrl;
+  $('original').textContent = it.text;
+  $('original').classList.add('hidden-text'); $('reveal').textContent = 'Show';
+  attempts.forEach(a => URL.revokeObjectURL(a.url)); attempts = []; n = 0; render();
+  $('prev').disabled = i <= 0; $('next').disabled = i >= items.length - 1;
+  scrollTo({ top: 0 });
+}
+
+function render() {
+  $('count').textContent = attempts.length ? `${attempts.length}` : '';
+  $('attempts').innerHTML = attempts.length
+    ? attempts.map((a, i) => `<div class="attempt"><span class="n">#${a.n} · ${a.secs}s</span><audio controls src="${a.url}"></audio><button data-del="${i}" aria-label="Delete">✕</button></div>`).reverse().join('')
+    : '<div class="mute" style="font-size:14px">Tap the red button to record. Newest is on top.</div>';
+}
+
+async function toggleRec() {
+  if (recorder && recorder.state === 'recording') { recorder.stop(); return; }
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch (e) { alert('Microphone not available: ' + e.message); return; }
+  $('player').pause();
+  const parts = [];
+  recorder = new MediaRecorder(stream);
+  recorder.ondataavailable = e => parts.push(e.data);
+  recorder.onstop = () => {
+    stream.getTracks().forEach(t => t.stop());
+    clearInterval(tick); $('timer').textContent = '';
+    $('rec').classList.remove('on'); $('rec').textContent = '●';
+    const a = { n: ++n, url: URL.createObjectURL(new Blob(parts, { type: recorder.mimeType })), secs: Math.round((Date.now() - recStart) / 1000) };
+    attempts.push(a); render();
+    const el = document.querySelector('#attempts audio');   // 录完直接回放
+    if (el) el.play().catch(() => {});
+  };
+  recorder.start(); recStart = Date.now();
+  $('rec').classList.add('on'); $('rec').textContent = '■';
+  tick = setInterval(() => {
+    const s = Math.round((Date.now() - recStart) / 1000);
+    $('timer').textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  }, 250);
+}
+
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]); }
+
+$('rec').onclick = toggleRec;
+$('prev').onclick = () => go(idx - 1);
+$('next').onclick = () => go(idx + 1);
+$('item').onchange = () => go(+$('item').value);
+$('reveal').onclick = $('original').onclick = () => {
+  const hid = $('original').classList.toggle('hidden-text');
+  $('reveal').textContent = hid ? 'Show' : 'Hide';
+};
+$('attempts').onclick = e => {
+  const b = e.target.closest('button[data-del]'); if (!b) return;
+  const a = attempts.splice(+b.dataset.del, 1)[0];
+  URL.revokeObjectURL(a.url); render();
+};
+$('open').onclick = () => $('fileInput').click();
+$('fileInput').onchange = async () => {
+  const f = $('fileInput').files[0]; $('fileInput').value = '';
+  if (!f) return;
+  let pack;
+  try { pack = JSON.parse(await f.text()); if (!pack.sections) throw new Error('not a Retell pack'); }
+  catch (e) { alert('Could not open this file: ' + e.message); return; }
+  await idb.set('pack', pack);
+  load(pack, 0);
+};
+
+(async () => {
+  const pack = await idb.get('pack');
+  if (pack) load(pack, ls.get('idx') || 0);
+})();
+
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+</script>
+</body>
+</html>
